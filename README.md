@@ -21,7 +21,7 @@ QOI (Quite OK Image) is a fast, lossless image compression format that achieves 
 - ✅ Decode QOI images back to PNG
 - ✅ Support for RGB and RGBA images
 - ✅ Poorly optimized for that authentic Python experience
-- ✅ Zero external dependencies (except NumPy and Pillow, but who's counting?)
+- ✅ Zero external dependencies (except Pillow, and optionally Numpy, but who's counting?)
 
 ## 📦 Installation
 
@@ -131,7 +131,7 @@ MIT License - Because even poorly implemented code deserves freedom.
 
 - [Dominic Szablewski](https://phoboslab.org/) for creating the QOI format
 - The Python community for enabling our questionable life choices
-- Coffee, for making this implementation possible
+- Antidepressants, for making this implementation possible
 
 ## ⚠️ Disclaimer
 
