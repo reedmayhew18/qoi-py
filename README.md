@@ -110,9 +110,9 @@ This implementation is "poorly optimized" in the most endearing way possible. Wh
 
 *"It's not slow, it's contemplative."*
 
-Typical performance on a modern machine:
-- **512x512 RGB image**: ~50ms encoding, ~30ms decoding
-- **1920x1080 RGBA image**: ~400ms encoding, ~250ms decoding
+Typical performance on a modern machine: (Tested on standard Colab instance)
+- **512x512 RGB image**: ~560ms encoding, ~571ms decoding
+- **1920x1080 RGBA image**: ~2284ms encoding, ~2969ms decoding
 - **Your patience**: Tested, but not broken
 
 ## 🤝 Contributing
