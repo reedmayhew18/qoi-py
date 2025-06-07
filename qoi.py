@@ -2,6 +2,7 @@ import struct
 import sys
 import os
 from PIL import Image
+#Use Numpy
 import numpy as np
 from pathlib import Path
 from typing import Tuple, Optional
