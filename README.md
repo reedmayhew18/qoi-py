@@ -9,7 +9,7 @@ A questionably optimized, pure Python implementation of the [QOI (Quite OK Image
 ## 🤷‍♂️ What is QOI?
 
 QOI (Quite OK Image) is a fast, lossless image compression format that achieves compression ratios comparable to PNG while being significantly simpler to implement. It's designed to be:
-- **Fast** - Encoding/decoding speeds that leave PNG in the dust
+- **Fast** - Encoding/decoding speeds that leave PNG in the dust (but not this specific encoder!)
 - **Simple** - The entire spec fits on a single page
 - **Lossless** - Your pixels come out exactly as they went in
 - **"Quite OK"** - Not the best at everything, but good enough for most things
