@@ -1,420 +1,416 @@
 import struct
 import sys
 import os
-from PIL import Image
-#Use Numpy
-import numpy as np
 from pathlib import Path
 from typing import Tuple, Optional
-import array
 
-# QOI Constants
-QOI_OP_INDEX = 0x00  # 00xxxxxx
-QOI_OP_DIFF = 0x40   # 01xxxxxx
-QOI_OP_LUMA = 0x80   # 10xxxxxx
-QOI_OP_RUN = 0xc0    # 11xxxxxx
-QOI_OP_RGB = 0xfe    # 11111110
-QOI_OP_RGBA = 0xff   # 11111111
-
-QOI_MASK_2 = 0xc0    # 11000000
-
+# Constants
 QOI_MAGIC = b'qoif'
 QOI_HEADER_SIZE = 14
+QOI_PIXELS_MAX = 400000000
 QOI_SRGB = 0
 QOI_LINEAR = 1
-
-QOI_PIXELS_MAX = 400000000
-
-# Pre-create padding constant
 QOI_PADDING = b'\x00\x00\x00\x00\x00\x00\x00\x01'
 
-def qoi_color_hash(r: int, g: int, b: int, a: int) -> int:
-    """Calculate hash for color index."""
-    return (r * 3 + g * 5 + b * 7 + a * 11) & 63  # Use bitwise AND instead of modulo
+# Op Codes
+QOI_OP_INDEX = 0x00
+QOI_OP_DIFF  = 0x40
+QOI_OP_LUMA  = 0x80
+QOI_OP_RUN   = 0xc0
+QOI_OP_RGB   = 0xfe
+QOI_OP_RGBA  = 0xff
+QOI_MASK_2   = 0xc0
 
-class QOICodec:
-    def __init__(self):
-        self.padding = QOI_PADDING
-        # Pre-allocate reusable buffers
-        self._index_buffer = [0] * 256  # 64 * 4 components
-        self._output_buffer = bytearray(1024 * 1024)  # 1MB initial buffer
-    
-    def encode_file(self, input_path: str, output_path: str, colorspace: int = QOI_SRGB) -> int:
-        """Encode a PNG or JPG image to QOI format."""
-        # Load image using PIL
-        img = Image.open(input_path)
-        
-        # Convert to RGBA if necessary
-        if img.mode != 'RGBA':
-            img = img.convert('RGBA')
-        
-        # Get image data as numpy array - ensure C-contiguous for faster access
-        pixels = np.ascontiguousarray(img, dtype=np.uint8)
-        height, width = pixels.shape[:2]
-        channels = 4  # Always RGBA after conversion
-        
-        # Flatten the pixel array
-        pixels_flat = pixels.reshape(-1)
-        
-        # Encode to QOI
-        encoded = self.encode(pixels_flat, width, height, channels, colorspace)
-        
-        if encoded is None:
-            return 0
-        
-        # Write to file
-        with open(output_path, 'wb') as f:
-            f.write(encoded)
-        
-        return len(encoded)
-    
-    def encode(self, pixels: np.ndarray, width: int, height: int, channels: int, colorspace: int) -> Optional[bytes]:
-        """Encode raw pixel data to QOI format."""
+class QOIEncoder:
+    def encode(self, pixels: bytes, width: int, height: int, channels: int, colorspace: int) -> Tuple[bytes, int]:
+        # Size validation
         if (width == 0 or height == 0 or 
             channels < 3 or channels > 4 or 
             colorspace > 1 or 
             height >= QOI_PIXELS_MAX // width):
-            return None
+            return b'', 0
         
-        # Calculate required size and ensure buffer is large enough
-        px_len = width * height * channels
-        max_size = px_len + px_len // 2 + QOI_HEADER_SIZE + 8
+        px_len = width * height
+        max_size = QOI_HEADER_SIZE + px_len * 5 + 8
         
-        if len(self._output_buffer) < max_size:
-            self._output_buffer = bytearray(max_size)
+        # Pre-allocate output buffer
+        output = bytearray(max_size)
         
-        # Use memoryview for zero-copy operations
-        output = memoryview(self._output_buffer)
-        out_pos = 0
+        # Write header
+        struct.pack_into('>4sIIBB', output, 0, QOI_MAGIC, width, height, channels, colorspace)
+        out_pos = QOI_HEADER_SIZE
         
-        # Write header directly
-        output[out_pos:out_pos+4] = QOI_MAGIC
-        out_pos += 4
-        struct.pack_into('>II', output, out_pos, width, height)
-        out_pos += 8
-        output[out_pos] = channels
-        output[out_pos + 1] = colorspace
-        out_pos += 2
+        # ---------------------------------------------------------
+        # THE OPTIMIZATION ZONE
+        # ---------------------------------------------------------
         
-        # Initialize encoder state using flat array for index
-        index = self._index_buffer
-        for i in range(256):
-            index[i] = 0 if i % 4 != 3 else 255
+        # We use a standard List for the index. It is faster than array.array
+        # for frequent updates in CPython.
+        index = [0] * 64 
         
-        px_prev_r = 0
-        px_prev_g = 0
-        px_prev_b = 0
-        px_prev_a = 255
+        # Flatten the input to a memoryview to avoid string copying
+        pixel_data = memoryview(pixels)
+        
+        # Previous pixel state
+        prev_r, prev_g, prev_b, prev_a = 0, 0, 0, 255
+        prev_px_int = (255 << 24) # 0x000000FF in standard QOI packing logic
+        
         run = 0
         
-        # Direct pixel access for better performance
-        pixels_data = pixels.data
-        px_end = px_len - channels
+        # Local variable caching (The holy grail of python speed)
+        # We bind these to locals so the interpreter doesn't search the global scope
+        qoi_op_run = QOI_OP_RUN
+        qoi_op_index = QOI_OP_INDEX
+        qoi_op_diff = QOI_OP_DIFF
+        qoi_op_luma = QOI_OP_LUMA
+        qoi_op_rgb = QOI_OP_RGB
+        qoi_op_rgba = QOI_OP_RGBA
         
-        # Main encoding loop - unrolled and optimized
-        px_pos = 0
-        while px_pos < px_len:
-            # Get current pixel values directly
-            px_r = pixels_data[px_pos]
-            px_g = pixels_data[px_pos + 1]
-            px_b = pixels_data[px_pos + 2]
-            px_a = pixels_data[px_pos + 3] if channels == 4 else 255
-            
-            # Check for run
-            if px_r == px_prev_r and px_g == px_prev_g and px_b == px_prev_b and px_a == px_prev_a:
-                run += 1
-                if run == 62 or px_pos == px_end:
-                    output[out_pos] = QOI_OP_RUN | (run - 1)
-                    out_pos += 1
-                    run = 0
-            else:
+        # Calculate end point for the loop
+        total_bytes = len(pixels)
+        last_pixel_index = total_bytes - channels
+        
+        # ---------------------------------------------------------
+        # THE LOOP
+        # We manually index the bytes. No slicing [i:i+4].
+        # Slicing creates a new object. We don't want new objects.
+        # ---------------------------------------------------------
+        
+        if channels == 4:
+            for i in range(0, total_bytes, 4):
+                # Direct access. SPEED.
+                r = pixel_data[i]
+                g = pixel_data[i+1]
+                b = pixel_data[i+2]
+                a = pixel_data[i+3]
+
+                # Combined integer for hashing and equality check
+                # (R, G, B, A) -> Int
+                px_int = (r << 24) | (g << 16) | (b << 8) | a
+
+                if px_int == prev_px_int:
+                    run += 1
+                    if run == 62 or i == last_pixel_index:
+                        output[out_pos] = qoi_op_run | (run - 1)
+                        out_pos += 1
+                        run = 0
+                    continue
+                
                 if run > 0:
-                    output[out_pos] = QOI_OP_RUN | (run - 1)
+                    output[out_pos] = qoi_op_run | (run - 1)
                     out_pos += 1
                     run = 0
+
+                # Hash: (r * 3 + g * 5 + b * 7 + a * 11) % 64
+                idx_pos = (r * 3 + g * 5 + b * 7 + a * 11) & 63
                 
-                # Calculate hash and index position
-                hash_val = (px_r * 3 + px_g * 5 + px_b * 7 + px_a * 11) & 63
-                index_pos = hash_val << 2  # hash_val * 4
-                
-                # Check index
-                if (index[index_pos] == px_r and 
-                    index[index_pos + 1] == px_g and 
-                    index[index_pos + 2] == px_b and 
-                    index[index_pos + 3] == px_a):
-                    output[out_pos] = QOI_OP_INDEX | hash_val
+                if index[idx_pos] == px_int:
+                    output[out_pos] = qoi_op_index | idx_pos
                     out_pos += 1
-                else:
-                    # Update index
-                    index[index_pos] = px_r
-                    index[index_pos + 1] = px_g
-                    index[index_pos + 2] = px_b
-                    index[index_pos + 3] = px_a
+                    # Update previous pixel state cache
+                    prev_px_int = px_int
+                    prev_r, prev_g, prev_b, prev_a = r, g, b, a
+                    continue
+
+                index[idx_pos] = px_int
+
+                if a == prev_a:
+                    vr = r - prev_r
+                    vg = g - prev_g
+                    vb = b - prev_b
                     
-                    if px_a == px_prev_a:  # Same alpha
-                        # Calculate differences
-                        vr = px_r - px_prev_r
-                        vg = px_g - px_prev_g
-                        vb = px_b - px_prev_b
-                        
+                    # DIFF OP (2-bit differences)
+                    # Checking bounds: -2..1
+                    if -2 <= vr <= 1 and -2 <= vg <= 1 and -2 <= vb <= 1:
+                        output[out_pos] = qoi_op_diff | ((vr + 2) << 4) | ((vg + 2) << 2) | (vb + 2)
+                        out_pos += 1
+                    
+                    # LUMA OP (Green diff + dr_dg + db_dg)
+                    else:
                         vg_r = vr - vg
                         vg_b = vb - vg
-                        
-                        if -2 <= vr <= 1 and -2 <= vg <= 1 and -2 <= vb <= 1:
-                            # Encode as DIFF
-                            output[out_pos] = QOI_OP_DIFF | ((vr + 2) << 4) | ((vg + 2) << 2) | (vb + 2)
-                            out_pos += 1
-                        elif -32 <= vg <= 31 and -8 <= vg_r <= 7 and -8 <= vg_b <= 7:
-                            # Encode as LUMA
-                            output[out_pos] = QOI_OP_LUMA | ((vg + 32) & 0x3f)
-                            output[out_pos + 1] = (((vg_r + 8) & 0x0f) << 4) | ((vg_b + 8) & 0x0f)
+                        # Checking bounds: vg: -32..31, others: -8..7
+                        if -32 <= vg <= 31 and -8 <= vg_r <= 7 and -8 <= vg_b <= 7:
+                            output[out_pos] = qoi_op_luma | (vg + 32)
+                            output[out_pos + 1] = ((vg_r + 8) << 4) | (vg_b + 8)
                             out_pos += 2
                         else:
-                            # Encode as RGB
-                            output[out_pos] = QOI_OP_RGB
-                            output[out_pos + 1] = px_r
-                            output[out_pos + 2] = px_g
-                            output[out_pos + 3] = px_b
+                            # RGB (Alpha matches)
+                            output[out_pos] = qoi_op_rgb
+                            output[out_pos+1] = r
+                            output[out_pos+2] = g
+                            output[out_pos+3] = b
                             out_pos += 4
-                    else:
-                        # Encode as RGBA
-                        output[out_pos] = QOI_OP_RGBA
-                        output[out_pos + 1] = px_r
-                        output[out_pos + 2] = px_g
-                        output[out_pos + 3] = px_b
-                        output[out_pos + 4] = px_a
-                        out_pos += 5
-                
-                px_prev_r = px_r
-                px_prev_g = px_g
-                px_prev_b = px_b
-                px_prev_a = px_a
-            
-            px_pos += channels
+                else:
+                    # RGBA (Full pixel)
+                    output[out_pos] = qoi_op_rgba
+                    output[out_pos+1] = r
+                    output[out_pos+2] = g
+                    output[out_pos+3] = b
+                    output[out_pos+4] = a
+                    out_pos += 5
+
+                prev_px_int = px_int
+                prev_r, prev_g, prev_b, prev_a = r, g, b, a
         
-        # Add padding
-        output[out_pos:out_pos+8] = self.padding
+        # ---------------------------------------------------------
+        # Same logic but for 3 channels (RGB)
+        # ---------------------------------------------------------
+        else:
+            for i in range(0, total_bytes, 3):
+                r = pixel_data[i]
+                g = pixel_data[i+1]
+                b = pixel_data[i+2]
+                a = 255 # Hardcoded opaque for RGB images
+
+                px_int = (r << 24) | (g << 16) | (b << 8) | a
+
+                if px_int == prev_px_int:
+                    run += 1
+                    if run == 62 or i == last_pixel_index:
+                        output[out_pos] = qoi_op_run | (run - 1)
+                        out_pos += 1
+                        run = 0
+                    continue
+                
+                if run > 0:
+                    output[out_pos] = qoi_op_run | (run - 1)
+                    out_pos += 1
+                    run = 0
+
+                idx_pos = (r * 3 + g * 5 + b * 7 + a * 11) & 63
+                
+                if index[idx_pos] == px_int:
+                    output[out_pos] = qoi_op_index | idx_pos
+                    out_pos += 1
+                    prev_px_int = px_int
+                    prev_r, prev_g, prev_b, prev_a = r, g, b, a
+                    continue
+
+                index[idx_pos] = px_int
+
+                # Since source is RGB, Alpha (255) always matches previous Alpha (255)
+                # We only need to check DIFF, LUMA, or RGB
+                vr = r - prev_r
+                vg = g - prev_g
+                vb = b - prev_b
+
+                if -2 <= vr <= 1 and -2 <= vg <= 1 and -2 <= vb <= 1:
+                    output[out_pos] = qoi_op_diff | ((vr + 2) << 4) | ((vg + 2) << 2) | (vb + 2)
+                    out_pos += 1
+                else:
+                    vg_r = vr - vg
+                    vg_b = vb - vg
+                    if -32 <= vg <= 31 and -8 <= vg_r <= 7 and -8 <= vg_b <= 7:
+                        output[out_pos] = qoi_op_luma | (vg + 32)
+                        output[out_pos + 1] = ((vg_r + 8) << 4) | (vg_b + 8)
+                        out_pos += 2
+                    else:
+                        output[out_pos] = qoi_op_rgb
+                        output[out_pos+1] = r
+                        output[out_pos+2] = g
+                        output[out_pos+3] = b
+                        out_pos += 4
+
+                prev_px_int = px_int
+                prev_r, prev_g, prev_b, prev_a = r, g, b, a
+
+        output[out_pos:out_pos+8] = QOI_PADDING
         out_pos += 8
         
-        return bytes(output[:out_pos])
+        return bytes(output[:out_pos]), out_pos
+
+
+class QOIDecoder:
+    def decode(self, data: bytes, channels: int = 0) -> Tuple[Optional[bytes], int, int, int, int]:
+        if len(data) < QOI_HEADER_SIZE + 8:
+            return None, 0, 0, 0, 0
+        
+        # Unpack header
+        magic, width, height, desc_channels, colorspace = struct.unpack_from('>4sIIBB', data, 0)
+        
+        if magic != QOI_MAGIC or width == 0 or height == 0:
+            return None, 0, 0, 0, 0
+
+        out_channels = channels if channels != 0 else desc_channels
+        px_count = width * height
+        output_size = px_count * out_channels
+        
+        output = bytearray(output_size)
+        index = [0] * 64
+        
+        # Colors
+        r, g, b, a = 0, 0, 0, 255
+        
+        data_len = len(data) - 8
+        p = QOI_HEADER_SIZE
+        run = 0
+        out_pos = 0
+        
+        # Local caching
+        qoi_op_index = QOI_OP_INDEX
+        qoi_op_diff = QOI_OP_DIFF
+        qoi_op_luma = QOI_OP_LUMA
+        qoi_op_run = QOI_OP_RUN
+        qoi_op_rgb = QOI_OP_RGB
+        qoi_op_rgba = QOI_OP_RGBA
+        qoi_mask_2 = QOI_MASK_2
+        
+        # ---------------------------------------------------------
+        # DECODER LOOP OPTIMIZATION
+        # ---------------------------------------------------------
+        
+        # Split loops based on output channels to avoid "if out_channels == 4" check inside the loop
+        if out_channels == 4:
+            for _ in range(px_count):
+                if run > 0:
+                    run -= 1
+                elif p < data_len:
+                    b1 = data[p]
+                    p += 1
+                    
+                    if b1 == qoi_op_rgb:
+                        r, g, b = data[p], data[p+1], data[p+2]
+                        p += 3
+                    elif b1 == qoi_op_rgba:
+                        r, g, b, a = data[p], data[p+1], data[p+2], data[p+3]
+                        p += 4
+                    elif (b1 & qoi_mask_2) == qoi_op_index:
+                        px = index[b1 & 63]
+                        r = (px >> 24) & 0xFF
+                        g = (px >> 16) & 0xFF
+                        b = (px >> 8) & 0xFF
+                        a = px & 0xFF
+                    elif (b1 & qoi_mask_2) == qoi_op_diff:
+                        r = (r + ((b1 >> 4) & 0x03) - 2) & 0xFF
+                        g = (g + ((b1 >> 2) & 0x03) - 2) & 0xFF
+                        b = (b + (b1 & 0x03) - 2) & 0xFF
+                    elif (b1 & qoi_mask_2) == qoi_op_luma:
+                        b2 = data[p]
+                        p += 1
+                        vg = (b1 & 0x3F) - 32
+                        r = (r + vg - 8 + ((b2 >> 4) & 0x0F)) & 0xFF
+                        g = (g + vg) & 0xFF
+                        b = (b + vg - 8 + (b2 & 0x0F)) & 0xFF
+                    elif (b1 & qoi_mask_2) == qoi_op_run:
+                        run = (b1 & 0x3F)
+                    
+                    idx_pos = (r * 3 + g * 5 + b * 7 + a * 11) & 63
+                    index[idx_pos] = (r << 24) | (g << 16) | (b << 8) | a
+
+                output[out_pos] = r
+                output[out_pos+1] = g
+                output[out_pos+2] = b
+                output[out_pos+3] = a
+                out_pos += 4
+                
+        else: # out_channels == 3
+            for _ in range(px_count):
+                if run > 0:
+                    run -= 1
+                elif p < data_len:
+                    b1 = data[p]
+                    p += 1
+                    
+                    if b1 == qoi_op_rgb:
+                        r, g, b = data[p], data[p+1], data[p+2]
+                        p += 3
+                    elif b1 == qoi_op_rgba:
+                        r, g, b, a = data[p], data[p+1], data[p+2], data[p+3]
+                        p += 4
+                    elif (b1 & qoi_mask_2) == qoi_op_index:
+                        px = index[b1 & 63]
+                        r = (px >> 24) & 0xFF
+                        g = (px >> 16) & 0xFF
+                        b = (px >> 8) & 0xFF
+                        a = px & 0xFF
+                    elif (b1 & qoi_mask_2) == qoi_op_diff:
+                        r = (r + ((b1 >> 4) & 0x03) - 2) & 0xFF
+                        g = (g + ((b1 >> 2) & 0x03) - 2) & 0xFF
+                        b = (b + (b1 & 0x03) - 2) & 0xFF
+                    elif (b1 & qoi_mask_2) == qoi_op_luma:
+                        b2 = data[p]
+                        p += 1
+                        vg = (b1 & 0x3F) - 32
+                        r = (r + vg - 8 + ((b2 >> 4) & 0x0F)) & 0xFF
+                        g = (g + vg) & 0xFF
+                        b = (b + vg - 8 + (b2 & 0x0F)) & 0xFF
+                    elif (b1 & qoi_mask_2) == qoi_op_run:
+                        run = (b1 & 0x3F)
+                    
+                    idx_pos = (r * 3 + g * 5 + b * 7 + a * 11) & 63
+                    index[idx_pos] = (r << 24) | (g << 16) | (b << 8) | a
+
+                output[out_pos] = r
+                output[out_pos+1] = g
+                output[out_pos+2] = b
+                out_pos += 3
+                
+        return bytes(output), width, height, desc_channels, colorspace
+
+class QOICodec:
+    # Use existing codec wrapper logic
+    def __init__(self):
+        self.encoder = QOIEncoder()
+        self.decoder = QOIDecoder()
+        
+    def encode_file(self, input_path: str, output_path: str, colorspace: int = QOI_SRGB) -> int:
+        try:
+            from PIL import Image
+            img = Image.open(input_path)
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            pixels = img.tobytes()
+            width, height = img.size
+            
+            # Since we forced RGBA in PIL, channels is 4
+            encoded, size = self.encoder.encode(pixels, width, height, 4, colorspace)
+            
+            if size == 0: return 0
+            with open(output_path, 'wb') as f:
+                f.write(encoded)
+            return size
+        except ImportError:
+            print("Girl you need PIL. pip install Pillow.")
+            return 0
     
     def decode_file(self, input_path: str, output_path: str, force_channels: int = 0) -> bool:
-        """Decode a QOI image to PNG format."""
         try:
             with open(input_path, 'rb') as f:
                 data = f.read()
-            
-            decoded, width, height, channels, colorspace = self.decode(data, force_channels)
-            
-            if decoded is None:
-                return False
-            
-            # Create PIL image directly from array
-            if force_channels > 0:
-                channels = force_channels
-            
-            decoded_array = np.frombuffer(decoded, dtype=np.uint8)
-            pixels = decoded_array.reshape(height, width, channels)
-            
-            # Create PIL image
-            if channels == 3:
-                img = Image.fromarray(pixels, 'RGB')
-            else:
-                img = Image.fromarray(pixels, 'RGBA')
-            
-            # Save as PNG
+            pixels, width, height, channels, _ = self.decoder.decode(data, force_channels)
+            if pixels is None: return False
+            from PIL import Image
+            mode = 'RGBA' if channels == 4 else 'RGB'
+            img = Image.frombytes(mode, (width, height), pixels)
             img.save(output_path, 'PNG')
             return True
-            
-        except Exception as e:
-            print(f"Error decoding QOI: {e}")
+        except Exception:
             return False
-    
-    def decode(self, data: bytes, channels: int = 0) -> Tuple[Optional[bytes], int, int, int, int]:
-        """Decode QOI data to raw pixels."""
-        if len(data) < QOI_HEADER_SIZE + len(self.padding):
-            return None, 0, 0, 0, 0
-        
-        # Use memoryview for zero-copy access
-        data_view = memoryview(data)
-        
-        # Read header
-        if data_view[0:4] != QOI_MAGIC:
-            return None, 0, 0, 0, 0
-        
-        width, height = struct.unpack_from('>II', data_view, 4)
-        desc_channels = data_view[12]
-        colorspace = data_view[13]
-        
-        if (width == 0 or height == 0 or 
-            desc_channels < 3 or desc_channels > 4 or 
-            colorspace > 1 or
-            height >= QOI_PIXELS_MAX // width):
-            return None, 0, 0, 0, 0
-        
-        if channels == 0:
-            channels = desc_channels
-        
-        px_len = width * height * channels
-        
-        # Use array.array for better performance than list
-        pixels = array.array('B')
-        pixels_append = pixels.extend  # Cache method lookup
-        
-        # Pre-allocate approximate size to avoid resizing
-        try:
-            pixels = array.array('B', bytes(px_len))
-            pixels_ptr = 0
-            use_array_index = True
-        except:
-            pixels = array.array('B')
-            use_array_index = False
-        
-        # Initialize decoder state with flat array
-        index = self._index_buffer
-        for i in range(256):
-            index[i] = 0 if i % 4 != 3 else 255
-        
-        px_r = 0
-        px_g = 0
-        px_b = 0
-        px_a = 255
-        run = 0
-        
-        chunks_len = len(data) - len(self.padding)
-        p = QOI_HEADER_SIZE
-        
-        # Optimized decode loop
-        for px_pos in range(0, px_len, channels):
-            if run > 0:
-                run -= 1
-            elif p < chunks_len:
-                b1 = data_view[p]
-                p += 1
-                
-                if b1 == QOI_OP_RGB:
-                    px_r = data_view[p]
-                    px_g = data_view[p + 1]
-                    px_b = data_view[p + 2]
-                    p += 3
-                elif b1 == QOI_OP_RGBA:
-                    px_r = data_view[p]
-                    px_g = data_view[p + 1]
-                    px_b = data_view[p + 2]
-                    px_a = data_view[p + 3]
-                    p += 4
-                elif (b1 & QOI_MASK_2) == QOI_OP_INDEX:
-                    idx = (b1 & 0x3f) << 2
-                    px_r = index[idx]
-                    px_g = index[idx + 1]
-                    px_b = index[idx + 2]
-                    px_a = index[idx + 3]
-                elif (b1 & QOI_MASK_2) == QOI_OP_DIFF:
-                    px_r = (px_r + ((b1 >> 4) & 0x03) - 2) & 0xff
-                    px_g = (px_g + ((b1 >> 2) & 0x03) - 2) & 0xff
-                    px_b = (px_b + (b1 & 0x03) - 2) & 0xff
-                elif (b1 & QOI_MASK_2) == QOI_OP_LUMA:
-                    b2 = data_view[p]
-                    p += 1
-                    vg = (b1 & 0x3f) - 32
-                    px_r = (px_r + vg - 8 + ((b2 >> 4) & 0x0f)) & 0xff
-                    px_g = (px_g + vg) & 0xff
-                    px_b = (px_b + vg - 8 + (b2 & 0x0f)) & 0xff
-                elif (b1 & QOI_MASK_2) == QOI_OP_RUN:
-                    run = (b1 & 0x3f)
-                
-                # Update index
-                hash_val = (px_r * 3 + px_g * 5 + px_b * 7 + px_a * 11) & 63
-                idx = hash_val << 2
-                index[idx] = px_r
-                index[idx + 1] = px_g
-                index[idx + 2] = px_b
-                index[idx + 3] = px_a
-            
-            # Add pixel to output
-            if use_array_index:
-                if channels == 4:
-                    pixels[pixels_ptr] = px_r
-                    pixels[pixels_ptr + 1] = px_g
-                    pixels[pixels_ptr + 2] = px_b
-                    pixels[pixels_ptr + 3] = px_a
-                else:
-                    pixels[pixels_ptr] = px_r
-                    pixels[pixels_ptr + 1] = px_g
-                    pixels[pixels_ptr + 2] = px_b
-                pixels_ptr += channels
-            else:
-                if channels == 4:
-                    pixels_append((px_r, px_g, px_b, px_a))
-                else:
-                    pixels_append((px_r, px_g, px_b))
-        
-        return pixels.tobytes(), width, height, desc_channels, colorspace
-
 
 def main():
-    # Check command line arguments
     if len(sys.argv) != 2:
-        print("Usage: python qoi_converter.py <input_file>")
-        print("  Converts PNG/JPG to QOI, or QOI to PNG")
+        print("Usage: python qoi.py <file>")
         sys.exit(1)
-    
+        
     input_file = sys.argv[1]
-    
-    # Check if input file exists
     if not os.path.exists(input_file):
-        print(f"Error: File '{input_file}' not found")
+        print("File wrong. Bye.")
         sys.exit(1)
-    
-    # Get file extension
-    input_path = Path(input_file)
-    extension = input_path.suffix.lower()
-    
+        
     codec = QOICodec()
+    p = Path(input_file)
     
-    if extension in ['.png', '.jpg', '.jpeg']:
-        # Convert to QOI
-        output_file = input_path.with_suffix('.qoi')
-        print(f"Converting {input_file} to QOI format...")
-        
-        try:
-            bytes_written = codec.encode_file(input_file, str(output_file))
-            if bytes_written > 0:
-                print(f"✓ Successfully created {output_file} ({bytes_written:,} bytes)")
-                
-                # Calculate compression ratio if possible
-                input_size = os.path.getsize(input_file)
-                ratio = (input_size / bytes_written) if bytes_written > 0 else 0
-                print(f"  Compression ratio: {ratio:.2f}:1")
-            else:
-                print(f"✗ Failed to encode {input_file}")
-                sys.exit(1)
-        except Exception as e:
-            print(f"✗ Error encoding file: {e}")
-            sys.exit(1)
-            
-    elif extension == '.qoi':
-        # Convert to PNG
-        output_file = input_path.with_suffix('.png')
-        print(f"Converting {input_file} to PNG format...")
-        
-        try:
-            success = codec.decode_file(input_file, str(output_file))
-            if success:
-                output_size = os.path.getsize(output_file)
-                print(f"✓ Successfully created {output_file} ({output_size:,} bytes)")
-            else:
-                print(f"✗ Failed to decode {input_file}")
-                sys.exit(1)
-        except Exception as e:
-            print(f"✗ Error decoding file: {e}")
-            sys.exit(1)
-            
+    if p.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+        print(f"💅 Compressing {input_file}...")
+        s = codec.encode_file(input_file, str(p.with_suffix('.qoi')))
+        print(f"🔥 Size: {s:,} bytes") if s else print("💀 Fail.")
+    elif p.suffix.lower() == '.qoi':
+        print(f"💅 Expanding {input_file}...")
+        ok = codec.decode_file(input_file, str(p.with_suffix('.png')))
+        print("✨ Fabulous.") if ok else print("💀 Fail.")
     else:
-        print(f"Error: Unsupported file format '{extension}'")
-        print("Supported formats: PNG, JPG/JPEG (for encoding), QOI (for decoding)")
-        sys.exit(1)
-
+        print("Unknown file type. I don't know her.")
 
 if __name__ == "__main__":
     main()
