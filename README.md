@@ -17,7 +17,7 @@ QOI is a fast, lossless image compression format that fits on a single napkin. I
 
 ## 💅 The Glow Up (Features)
 
-This isn't your average "for loop" implementation. We optimized her to within an inch of her interpreter's life.
+This isn't your average "for loop" implementation. We optimized her so aggressively that she almost forgot she was an interpreted language.
 
 - ✅ **Full QOI Spec Compliance**: She follows the rules, mostly.
 - ✅ **Zero Heavy Dependencies**: We kicked `numpy` out of the house. We don't need her drama. It's just Python and `Pillow` for file I/O.
@@ -124,3 +124,4 @@ Do use this for:
 ---
 
 *Remember: It's not about the execution speed, it's about the developer experience. And this experience was ✨ traumatic ✨.*
+
