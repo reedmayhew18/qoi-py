@@ -90,13 +90,6 @@ How did we make Python do this?
 3.  **Bitwise Magic**: We use `& 63` instead of `% 64` because math is hard but logic is fashion.
 4.  **Lists over Arrays**: We switched from `array.array` to standard lists for the hash index because CPython optimizes lists like crazy.
 
-## 🤝 Contributing
-
-Think you can make her tighter? Want to optimize a loop? Feel free to submit a PR!
-- Bug fixes: Yes.
-- Optimization hacks: **YES PLEASE.**
-- Formatting complaints: The door is over there.
-
 ## 📝 License
 
 MIT License - Because style should be free.
@@ -124,5 +117,6 @@ Do use this for:
 ---
 
 *Remember: It's not about the execution speed, it's about the developer experience. And this experience was ✨ traumatic ✨.*
+
 
 
