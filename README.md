@@ -5,7 +5,7 @@
 ![QOI](https://img.shields.io/badge/QOI-spec%20compliant-orange.svg)
 ![Sass](https://img.shields.io/badge/sass-100%25-pink.svg)
 
-A fiercely optimized, pure Python implementation of the [QOI (Quite OK Image)](https://qoiformat.org/) format. We took a "Quite OK" format and gave her a BBL (Byte-Buffer Logic) and a face lift.
+A fiercely optimized, pure Python implementation of the [QOI (Quite OK Image)](https://qoiformat.org/) format by [@phoboslab](https://github.com/phoboslab). We took a "Quite OK" format and gave her a BBL (Byte-Buffer Logic) and a face lift.
 
 ## 🤷‍♂️ What is QOI?
 
@@ -124,4 +124,5 @@ Do use this for:
 ---
 
 *Remember: It's not about the execution speed, it's about the developer experience. And this experience was ✨ traumatic ✨.*
+
 
