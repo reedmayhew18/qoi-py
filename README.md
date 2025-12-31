@@ -1,49 +1,51 @@
-# QOI-Py - A Poorly Implemented Native Python QOI Encoder/Decoder
+# 👑 QOI-Py - The QOIEEN of Python Image Compression
 
 ![Python](https://img.shields.io/badge/python-3.7+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![QOI](https://img.shields.io/badge/QOI-spec%20compliant-orange.svg)
+![Sass](https://img.shields.io/badge/sass-100%25-pink.svg)
 
-A questionably optimized, pure Python implementation of the [QOI (Quite OK Image)](https://qoiformat.org/) format encoder and decoder. Because sometimes you need image compression that's just... quite OK.
+A fiercely optimized, pure Python implementation of the [QOI (Quite OK Image)](https://qoiformat.org/) format. We took a "Quite OK" format and gave her a BBL (Byte-Buffer Logic) and a face lift.
 
 ## 🤷‍♂️ What is QOI?
 
-QOI (Quite OK Image) is a fast, lossless image compression format that achieves compression ratios comparable to PNG while being significantly simpler to implement. It's designed to be:
-- **Fast** - Encoding/decoding speeds that leave PNG in the dust (but not this specific encoder!)
-- **Simple** - The entire spec fits on a single page
-- **Lossless** - Your pixels come out exactly as they went in
-- **"Quite OK"** - Not the best at everything, but good enough for most things
+QOI is a fast, lossless image compression format that fits on a single napkin. It's designed to be:
+- **Fast** - Like, C++ fast (usually).
+- **Simple** - Easier to understand than your ex's mixed signals.
+- **Lossless** - Your pixels come out exactly as they went in. No filters, #NoFilter.
+- **"Quite OK"** - She's not trying to be JPEG 2000, she's just trying to get the job done.
 
-## 🎯 Features
+## 💅 The Glow Up (Features)
 
-- ✅ Full QOI specification compliance (probably)
-- ✅ Encode PNG/JPEG images to QOI format
-- ✅ Decode QOI images back to PNG
-- ✅ Support for RGB and RGBA images
-- ✅ Poorly optimized for that authentic Python experience
-- ✅ Zero external dependencies (except Pillow, and optionally Numpy, but who's counting?)
+This isn't your average "for loop" implementation. We optimized her to within an inch of her interpreter's life.
+
+- ✅ **Full QOI Spec Compliance**: She follows the rules, mostly.
+- ✅ **Zero Heavy Dependencies**: We kicked `numpy` out of the house. We don't need her drama. It's just Python and `Pillow` for file I/O.
+- ✅ **Memory Aware**: We use `memoryview` because we hate copying data. Only recycled references in this household.
+- ✅ **RGB & RGBA**: She handles transparency like a pro.
+- ✅ **Certified "Good Enough"**: It's Python doing low-level bit shifting. It's camp.
 
 ## 📦 Installation
 
 ```bash
-# Clone this repository
+# Clone the castle
 git clone https://github.com/reedmayhew18/qoi-py.git
 cd qoi-py
 
-# Install dependencies
-pip install numpy pillow
+# Install dependencies (literally just Pillow, we travel light)
+pip install pillow
 ```
 
 ## 🚀 Usage
 
-### Command Line Interface
+### Command Line Runway
 
 ```bash
-# Convert PNG/JPEG to QOI
+# Squeeze that PNG into a QOI
 python qoi.py image.png
-# Output: image.qoi
+# Output: image.qoi (She's skinny now!)
 
-# Convert QOI back to PNG
+# Inflate the QOI back to PNG
 python qoi.py image.qoi
 # Output: image.png
 ```
@@ -53,105 +55,72 @@ python qoi.py image.qoi
 ```python
 from qoi import QOICodec
 
-# Initialize codec
+# Initialize her majesty
 codec = QOICodec()
 
-# Encode PNG/JPEG to QOI
+# Encode
 bytes_written = codec.encode_file('input.png', 'output.qoi')
-print(f"Encoded {bytes_written} bytes")
+print(f"Slayed {bytes_written} bytes")
 
-# Decode QOI to PNG
+# Decode
 success = codec.decode_file('input.qoi', 'output.png')
-print(f"Decode {'successful' if success else 'failed'}")
+print(f"Resurrection {'successful' if success else 'flopped'}")
 ```
 
-### Advanced Usage
+## 👠 Performance
 
-```python
-import numpy as np
-from qoi import QOICodec
+Look, she's running in heels (the Python Interpreter).
 
-codec = QOICodec()
+We manually unrolled loops, cached local variables, banished dot-operators, and used raw byte indexing instead of slicing. She is as fast as pure Python *physically allows*.
 
-# Work with raw pixel data
-pixels = np.random.randint(0, 255, (100, 100, 4), dtype=np.uint8)
-encoded = codec.encode(pixels.flatten(), width=100, height=100, channels=4, colorspace=0)
+- **Encoding**: faster than a snail, slower than C. It's "contemplative."
+- **Decoding**: Actually surprisingly snappy. She puts the "Quite" in "Quite OK."
+- **Memory**: Snatched waist. We pre-allocate buffers so the garbage collector can take a nap.
 
-# Decode back
-decoded, w, h, c, cs = codec.decode(encoded)
-```
+**Benchmarks:**
+*"She's serving face, not frame rate."*
+- **512x512 RGB**: ~0.4s (She's sprinting)
+- **1920x1080 RGBA**: ~2.0s (She's jogging, don't rush her)
 
-## 🐌 Performance
+## 🔧 Implementation Tea
 
-This implementation is "poorly optimized" in the most endearing way possible. While we've made some attempts at optimization (pre-allocated buffers, bitwise operations, etc.), it's still Python, so expect:
-
-- **Encoding speed**: Slower than C implementations, faster than a snail
-- **Decoding speed**: Quick enough to not make you question your life choices
-- **Memory usage**: Reasonable, unless you're processing billboard-sized images
-
-## 🔧 Implementation Details
-
-### Optimizations (Such As They Are)
-- Pre-allocated buffers to reduce memory allocation overhead
-- Bitwise operations for hash calculations
-- Direct memory access using memoryview
-- Flat arrays instead of nested structures
-- array.array for typed data instead of Python lists
-
-### Supported Features
-- ✅ QOI_OP_RGB - Full color pixels
-- ✅ QOI_OP_RGBA - Full color with alpha
-- ✅ QOI_OP_INDEX - Previously seen colors
-- ✅ QOI_OP_DIFF - Small differences
-- ✅ QOI_OP_LUMA - Larger differences
-- ✅ QOI_OP_RUN - Repeated pixels
-
-## 📊 Benchmarks
-
-*"It's not slow, it's contemplative."*
-
-Typical performance on a modern machine: (Tested on a standard Google Colab instance)
-- **512x512 RGB image**: ~560ms encoding, ~571ms decoding
-- **1920x1080 RGBA image**: ~2284ms encoding, ~2969ms decoding
-- **Your patience**: Tested, but not broken
+How did we make Python do this?
+1.  **Local Variable Caching**: Because looking up `self.variable` takes too long, sweetie.
+2.  **No Slicing**: Slicing creates copies. We don't litter. We index raw bytes.
+3.  **Bitwise Magic**: We use `& 63` instead of `% 64` because math is hard but logic is fashion.
+4.  **Lists over Arrays**: We switched from `array.array` to standard lists for the hash index because CPython optimizes lists like crazy.
 
 ## 🤝 Contributing
 
-Found a way to make this implementation even more poorly optimized? Or perhaps (gasp) better? Feel free to submit a PR! We welcome:
-- Bug fixes (there are probably many)
-- Performance "improvements" 
-- Additional features nobody asked for
-- More sarcastic comments in the code
+Think you can make her tighter? Want to optimize a loop? Feel free to submit a PR!
+- Bug fixes: Yes.
+- Optimization hacks: **YES PLEASE.**
+- Formatting complaints: The door is over there.
 
 ## 📝 License
 
-MIT License - Because even poorly implemented code deserves freedom.
+MIT License - Because style should be free.
 
 ## 🙏 Acknowledgments
 
-- [Dominic Szablewski](https://phoboslab.org/) for creating the QOI format
-- The Python community for enabling our questionable life choices
-- Antidepressants, for making this implementation possible
+- [Dominic Szablewski](https://phoboslab.org/) for inventing QOI.
+- The Python Core Developers for creating a language that is slow but beautiful.
+- My anxiety, for making me optimize this at 3 AM.
 
 ## ⚠️ Disclaimer
 
-This implementation is called "poorly implemented" for a reason. While it correctly implements the QOI specification (we think), it's not recommended for:
-- Production use (unless you enjoy living dangerously)
-- Performance-critical applications
-- Impressing your friends who write C
+**This is a Python script doing binary compression.**
 
-It IS recommended for:
-- Learning how QOI works
-- Quick and dirty image conversion
-- Proving that anything can be implemented in Python
+Do not use this for:
+- Real-time video streaming.
+- Life support systems.
+- Impressing C++ developers (they won't get it).
 
-## 🐛 Known Issues
-
-- It's written in Python (some consider this a bug, we consider it a feature)
-- Probably doesn't handle edge cases you haven't thought of yet
-- May cause existential questions about why you're not using a C implementation
+Do use this for:
+- Learning how compression works.
+- Proving that Python can do anything if you bully it enough.
+- The aesthetic.
 
 ---
 
-*Remember: It's not about the destination, it's about the journey. And this journey involves pure Python image compression.*
-```
+*Remember: It's not about the execution speed, it's about the developer experience. And this experience was ✨ traumatic ✨.*
